@@ -1,6 +1,6 @@
 import sys
 import re
-    
+
 # utils
 def to_bytestring_from_int_int(number: int, sizeof_bytestring: int):
     idk = number.to_bytes(sizeof_bytestring, 'little', signed=False).hex()
@@ -24,7 +24,10 @@ def to_bytestring_from_str_int(string: str, sizeof_bytestring: int):
 # https://wiki.osdev.org/COFF
 class COFFObjectFile:
     def __init__(self, text_no_exts: str, externs: list[str], occurences: dict):
-        text_section_shift = 20 + 0 + 40 + len(externs) * 10
+        len_of_occurences = 0
+        for key in occurences.keys():
+            len_of_occurences += len(occurences[key])
+        text_section_shift = 20 + 0 + 40 + len_of_occurences * 10
         true_sizeof_text = int((len(text_no_exts) + 1) / 3)
         f_symptr = text_section_shift + true_sizeof_text + 0
         f_nsyms = 6 + len(externs)
@@ -126,8 +129,8 @@ def main():
     contents = remove_comments(contents)
 
     contents = contents.replace('\n', ' ')
-    contents = contents.replace('   ', ' ')
-    contents = contents.replace('  ', ' ')
+    # replace all multiple spaces with one
+    contents = re.sub(r'\s+', ' ', contents)
     contents += ' '
 
     contents, occurences = get_externs_from_string(contents)
