@@ -2,14 +2,13 @@ import sys
 import re
 
 # utils
-def to_bytestring_from_int_int(number: int, sizeof_bytestring: int):
-    idk = number.to_bytes(sizeof_bytestring, 'little', signed=False).hex()
-    return idk
+def to_bytestring_from_int_with_size(number: int, sizeof_bytestring: int):
+    return number.to_bytes(sizeof_bytestring, 'little', signed=False).hex()
 
 def to_bytestring_from_str(string: str):
     return ''.join(hex(ord(c))[2:] + ' ' for c in string)
 
-def to_bytestring_from_str_int(string: str, sizeof_bytestring: int):
+def to_bytestring_from_str_with_size(string: str, sizeof_bytestring: int):
     bytestring = ''.join(hex(ord(c))[2:] for c in string)
     if len(string) > sizeof_bytestring:
         raise Exception
@@ -51,8 +50,8 @@ class COFFObjectFile:
 
 class FileHeader:
     def __init__(self, f_symptr: int, f_nsyms: int):
-        self.data = '64 86 01 00 00 00 00 00 ' + to_bytestring_from_int_int(f_symptr, 4) + \
-            ' ' + to_bytestring_from_int_int(f_nsyms, 4) + ' 00 00 00 00 '
+        self.data = '64 86 01 00 00 00 00 00 ' + to_bytestring_from_int_with_size(f_symptr, 4) + \
+            ' ' + to_bytestring_from_int_with_size(f_nsyms, 4) + ' 00 00 00 00 '
 
 # have no need in that header
 class OptionalHeader:
@@ -60,9 +59,9 @@ class OptionalHeader:
 
 class TextSectionHeader:
     def __init__(self, s_size: int, s_scnptr: int, s_relptr: int, s_nreloc: int):
-        self.data = '2e 74 65 78 74 00 00 00 00 00 00 00 00 00 00 00 ' + to_bytestring_from_int_int(s_size, 4) + \
-        ' ' + to_bytestring_from_int_int(s_scnptr, 4) + to_bytestring_from_int_int(s_relptr, 4) + ' 00 00 00 00 ' + \
-        to_bytestring_from_int_int(s_nreloc, 2) + ' 00 00 20 00 50 60 '
+        self.data = '2e 74 65 78 74 00 00 00 00 00 00 00 00 00 00 00 ' + to_bytestring_from_int_with_size(s_size, 4) + \
+        ' ' + to_bytestring_from_int_with_size(s_scnptr, 4) + to_bytestring_from_int_with_size(s_relptr, 4) + ' 00 00 00 00 ' + \
+        to_bytestring_from_int_with_size(s_nreloc, 2) + ' 00 00 20 00 50 60 '
 
 class TextSectionData:
     def __init__(self, text_bytes):
@@ -74,8 +73,8 @@ class RelocationEntries:
             raise Exception
         self.data = ''
         for i, _ in enumerate(r_vaddr):
-            self.data += to_bytestring_from_int_int(r_vaddr[i], 4) + ' ' + \
-            to_bytestring_from_int_int(r_symndx[i], 4) + ' 04 00 '
+            self.data += to_bytestring_from_int_with_size(r_vaddr[i], 4) + ' ' + \
+            to_bytestring_from_int_with_size(r_symndx[i], 4) + ' 04 00 '
 
 # have no need in that header
 class LineNumberEntries:
@@ -89,7 +88,7 @@ class SymbolTable:
         '62 73 6f 6c 75 74 00 00 00 00 ff ff 00 00 03 00 '
         last_externs_size = 4  # has to be 4 at beginning
         for i, extern in enumerate(externs):
-            self.data += '00 00 00 00 ' + to_bytestring_from_int_int(last_externs_size, 4) + \
+            self.data += '00 00 00 00 ' + to_bytestring_from_int_with_size(last_externs_size, 4) + \
             ' 00 00 00 00 00 00 00 00 02 00 '
             last_externs_size += len(extern) + 1
         self.data += '73 74 61 72 74 00 00 00 00 00 00 00 01 00 00 00 02 00'
@@ -104,7 +103,7 @@ class StringTable:
             symbols += to_bytestring_from_str(name) + ' 00'
         self.data = ''
         if symbol_names:
-            self.data = to_bytestring_from_int_int(symbol_count, 4) + symbols
+            self.data = to_bytestring_from_int_with_size(symbol_count, 4) + symbols
 
 
 
@@ -124,7 +123,7 @@ def main():
     contents = file.read()
     file.close()
 
-    text_len = to_bytestring_from_int_int(len(contents), 4)
+    text_len = to_bytestring_from_int_with_size(len(contents), 4)
 
     contents = remove_comments(contents)
 
@@ -157,23 +156,19 @@ def main():
         output_file.write(bytes_to_write)
 
 
-# more utils (has to be redone using regex)
+# more utils
 def get_externs_from_string(contents: str):
     occurences = {}
-    split_contents = contents.split(' ')
-    real_i = 0
-    for i, something in enumerate(split_contents):
-        if something in ['e8', 'E8'] \
-            and i != len(split_contents) \
-            and len(split_contents[i+1]) > 2:
-            next_word = split_contents[i+1]
-            if next_word in occurences:  
-                occurences[next_word].append(real_i+1)
-            else:
-                occurences[next_word] = [real_i+1]
-            contents = contents.replace(next_word, '00 00 00 00', 1)
-            real_i += 3
-        real_i += 1
+    matches = re.findall("[eE]8 (.*?) ", contents)
+    funcs_symbols = [m for m in matches if len(m) > 2]
+    for sym in funcs_symbols:
+        split_contents = contents.split(' ')
+        sym_pos = split_contents.index(sym)
+        if sym in occurences:
+            occurences[sym].append(sym_pos)
+        else:
+            occurences[sym] = [sym_pos]
+        contents = contents.replace(sym, '00 00 00 00', 1)
     return contents, occurences
 
 def strings_into_bytes(contents):
@@ -183,8 +178,6 @@ def strings_into_bytes(contents):
         contents = contents.replace('"' + string + '"', to_bytestring_from_str(string))
         idk = 0
     return contents
-
-
 
 def remove_comments(contents):
     contents = re.sub(r'#.*?\n', '', contents)
