@@ -3,17 +3,19 @@ import re
 
 # utils
 def to_bytestring_from_int_with_size(number: int, sizeof_bytestring: int):
-    return number.to_bytes(sizeof_bytestring, 'little', signed=False).hex()
+    bytestring = number.to_bytes(sizeof_bytestring, 'little', signed=False).hex()
+    bytestring_spaced = ''.join([b + bytestring[i+1] + ' ' for i, b in enumerate(bytestring[::2])])
+    return bytestring_spaced
 
 def to_bytestring_from_str(string: str):
-    return ''.join(hex(ord(c))[2:] + ' ' for c in string)
+    return to_bytestring_from_str_with_size(string, len(string))
 
 def to_bytestring_from_str_with_size(string: str, sizeof_bytestring: int):
-    bytestring = ''.join(hex(ord(c))[2:] for c in string)
+    bytestring = ''.join(hex(ord(c))[2:] + ' ' for c in string)
     if len(string) > sizeof_bytestring:
         raise Exception
     for _ in range(sizeof_bytestring - len(string)):
-        bytestring += '00'
+        bytestring += '00 '
     return bytestring
 
 
@@ -21,6 +23,7 @@ def to_bytestring_from_str_with_size(string: str, sizeof_bytestring: int):
 
 # structs
 # https://wiki.osdev.org/COFF
+# https://learn.microsoft.com/en-us/windows/win32/debug/pe-format
 class COFFObjectFile:
     def __init__(self, text_no_exts: str, externs: list[str], occurences: dict):
         len_of_occurences = 0
@@ -50,18 +53,40 @@ class COFFObjectFile:
 
 class FileHeader:
     def __init__(self, f_symptr: int, f_nsyms: int):
-        self.data = '64 86 01 00 00 00 00 00 ' + to_bytestring_from_int_with_size(f_symptr, 4) + \
-            ' ' + to_bytestring_from_int_with_size(f_nsyms, 4) + ' 00 00 00 00 '
+        Machine = '64 86 ' # 0x8664. this means machine is x64
+        NumberOfSections = '01 00 ' # 0x000x number of sections in total
+        TimeDateStamp = '00 00 00 00 ' # time and date of build. zeroes here
+        PointerToSymbolTable = to_bytestring_from_int_with_size(f_symptr, 4)
+        NumberOfSymbols = to_bytestring_from_int_with_size(f_nsyms, 4)
+        SizeOfOptionalHeader = '00 00 ' # 0x0000. must be zero for object files
+        Characteristics = '00 00 ' # 0x0000. unknown flag
 
-# have no need in that header
+        self.data = Machine + NumberOfSections + TimeDateStamp + \
+            PointerToSymbolTable + NumberOfSymbols + SizeOfOptionalHeader + \
+            Characteristics
+
+# have no need in that header in object file
 class OptionalHeader:
     pass
 
 class TextSectionHeader:
     def __init__(self, s_size: int, s_scnptr: int, s_relptr: int, s_nreloc: int):
-        self.data = '2e 74 65 78 74 00 00 00 00 00 00 00 00 00 00 00 ' + to_bytestring_from_int_with_size(s_size, 4) + \
-        ' ' + to_bytestring_from_int_with_size(s_scnptr, 4) + to_bytestring_from_int_with_size(s_relptr, 4) + ' 00 00 00 00 ' + \
-        to_bytestring_from_int_with_size(s_nreloc, 2) + ' 00 00 20 00 50 60 '
+        Name = to_bytestring_from_str_with_size('.text', 8)
+        VirtualSize = '00 00 00 00 ' # 0x0000. should be set to zero for object files
+        VirtualAddress = '00 00 00 00 ' # 0x0000. for simplicity should be set to zero
+        SizeOfRawData = to_bytestring_from_int_with_size(s_size, 4)
+        PointerToRawData = to_bytestring_from_int_with_size(s_scnptr, 4)
+        PointerToRelocations = to_bytestring_from_int_with_size(s_relptr, 4)
+        PointerToLinenumbers = '00 00 00 00 ' # 0x0000. COFF debugging information is deprecated
+        NumberOfRelocations = to_bytestring_from_int_with_size(s_nreloc, 2)
+        NumberOfLinenumbers = '00 00 ' # 0x0000. COFF debugging information is deprecated
+        Characteristics = '20 00 00 60 ' # 0x60000020
+        # this means following flags set:
+        # IMAGE_SCN_CNT_CODE | IMAGE_SCN_MEM_EXECUTE | IMAGE_SCN_MEM_READ
+
+        self.data = Name + VirtualSize + VirtualAddress + SizeOfRawData + \
+                PointerToRawData + PointerToRelocations + PointerToLinenumbers + \
+                NumberOfRelocations + NumberOfLinenumbers + Characteristics
 
 class TextSectionData:
     def __init__(self, text_bytes):
@@ -73,34 +98,63 @@ class RelocationEntries:
             raise Exception
         self.data = ''
         for i, _ in enumerate(r_vaddr):
-            self.data += to_bytestring_from_int_with_size(r_vaddr[i], 4) + ' ' + \
-            to_bytestring_from_int_with_size(r_symndx[i], 4) + ' 04 00 '
+            # offset from the beginning of the section, plus the value of the section's RVA/Offset field
+            VirtualAddress = to_bytestring_from_int_with_size(r_vaddr[i], 4)
+            # a zero-based index into the symbol table
+            SymbolTableIndex = to_bytestring_from_int_with_size(r_symndx[i], 4)
+            Type = '04 00 ' # 0x0004. means IMAGE_REL_AMD64_REL32 flag set
+            self.data += VirtualAddress + SymbolTableIndex + Type
 
-# have no need in that header
+# have no need in that header (deprecated)
 class LineNumberEntries:
     pass
 
 class SymbolTable:
     def __init__(self, externs):
-        self.data = '2e 66 69 6c 65 00 00 00 00 00 00 00 fe ff' + \
-        '00 00 67 01 6d 61 69 6e 2e 73 00 00 00 00 00 00 00 00 00 00 00 00 2e 74 65 78 74 00 00 00' + \
-        '00 00 00 00 01 00 00 00 03 01 22 00 00 00 01 00 00 00 00 00 00 00 00 00 00 00 00 00 2e 61' + \
-        '62 73 6f 6c 75 74 00 00 00 00 ff ff 00 00 03 00 '
+        self.data = ''
+
+        # .file symbol
+        self.make_symbol_bytes( to_bytestring_from_str_with_size('.file', 8), \
+                          '00 00 00 00 ', 'FE FF ', '00 00 ', '67 ', '01 ' )
+        
+        # main.s symbol
+        self.make_symbol_bytes( to_bytestring_from_str_with_size('main.s', 8), \
+                          '00 00 00 00 ', '00 00 ', '00 00 ', '00 ', '00 ' )
+        
+        # .text symbol
+        self.make_symbol_bytes( to_bytestring_from_str_with_size('.text', 8), \
+                          '00 00 00 00 ', '01 00 ', '00 00 ', '03 ', '01 ' )
+        
+        # unknown symbol
+        self.make_symbol_bytes( '22 00 00 00 01 00 00 00 ', \
+                          '00 00 00 00 ', '01 00 ', '00 00 ', '03 ', '01 ' )
+        
+        # .absolut symbol
+        self.make_symbol_bytes( to_bytestring_from_str_with_size('.absolut', 8), \
+                          '00 00 00 00 ', 'FF FF ', '00 00 ', '03 ', '00 ' )
+        
+        # 
         last_externs_size = 4  # has to be 4 at beginning
         for i, extern in enumerate(externs):
-            self.data += '00 00 00 00 ' + to_bytestring_from_int_with_size(last_externs_size, 4) + \
-            ' 00 00 00 00 00 00 00 00 02 00 '
+            self.make_symbol_bytes( '00 00 00 00 ' + to_bytestring_from_int_with_size(last_externs_size, 4), \
+                                   '00 00 00 00 ', '00 00 ', '00 00 ', '02 ', '00 ' )
             last_externs_size += len(extern) + 1
-        self.data += '73 74 61 72 74 00 00 00 00 00 00 00 01 00 00 00 02 00'
+        
+        # start symbol
+        self.make_symbol_bytes( to_bytestring_from_str_with_size('start', 8), \
+                          '00 00 00 00 ', '01 00 ', '00 00 ', '02 ', '00 ' )
+        
+
+    def make_symbol_bytes(self, Name, Value, SectionNumber, Type, StorageClass, NumberOfAuxSymbols):
+        self.data += Name + Value + SectionNumber + Type + StorageClass + NumberOfAuxSymbols        
 
 class StringTable:
     def __init__(self, f_symptr: int, f_nsyms: int, symbol_names: list[str]):
-        self.base_offset = f_symptr + f_nsyms * 18
-        symbol_count = 4
+        symbol_count = 4  # padding
         symbols = ''
         for name in symbol_names:
             symbol_count += len(name) + 1
-            symbols += to_bytestring_from_str(name) + ' 00'
+            symbols += to_bytestring_from_str(name) + '00 '
         self.data = ''
         if symbol_names:
             self.data = to_bytestring_from_int_with_size(symbol_count, 4) + symbols
@@ -116,14 +170,12 @@ def main():
         file = open(filename, "r")
     except (FileNotFoundError, IOError):
         print("Cannot open file! Usage: " +
-            f"{sys.argv[0]} input_filename")
+            f"{sys.argv[0]} <input_filename>")
         file.close()
         return
     
     contents = file.read()
     file.close()
-
-    text_len = to_bytestring_from_int_with_size(len(contents), 4)
 
     contents = remove_comments(contents)
 
@@ -159,8 +211,8 @@ def main():
 # more utils
 def get_externs_from_string(contents: str):
     occurences = {}
-    matches = re.findall("[eE]8 (.*?) ", contents)
-    funcs_symbols = [m for m in matches if len(m) > 2]
+    matches = re.findall(r"[eE]8 (.*?) ", contents)
+    funcs_symbols = [m for m in matches if len(m) > 2] # don't take single bytes
     for sym in funcs_symbols:
         split_contents = contents.split(' ')
         sym_pos = split_contents.index(sym)
@@ -176,7 +228,6 @@ def strings_into_bytes(contents):
     strings_found = re.findall(string_pattern, contents)
     for string in strings_found:
         contents = contents.replace('"' + string + '"', to_bytestring_from_str(string))
-        idk = 0
     return contents
 
 def remove_comments(contents):
